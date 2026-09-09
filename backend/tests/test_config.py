@@ -3,11 +3,22 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.core.constants import (
+    DEFAULT_CONFIDENCE_HIGH_THRESHOLD,
+    DEFAULT_CONFIDENCE_MODERATE_THRESHOLD,
     DEFAULT_EMBEDDING_DIMENSIONS,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EVIDENCE_PARTIAL_THRESHOLD,
+    DEFAULT_EVIDENCE_SUFFICIENT_THRESHOLD,
+    DEFAULT_EVIDENCE_TARGET_COUNT,
+    DEFAULT_EVIDENCE_TARGET_SOURCE_COUNT,
+    DEFAULT_GENERATION_MODEL,
+    DEFAULT_GENERATION_TEMPERATURE,
+    DEFAULT_GENERATION_TIMEOUT_SECONDS,
+    DEFAULT_MAX_REGENERATION_ATTEMPTS,
     DEFAULT_RERANKER_MODEL,
     DEFAULT_RERANKER_TOP_K,
     DEFAULT_RRF_K,
+    DEFAULT_SEVERE_HALLUCINATION_RATE_THRESHOLD,
     EMBEDDING_MODEL_DIMENSIONS,
 )
 
@@ -176,3 +187,64 @@ def test_blank_env_reranker_model_normalizes_to_default(
     settings = Settings(_env_file=None, database_url=DATABASE_URL)
 
     assert settings.reranker_model == DEFAULT_RERANKER_MODEL
+
+
+# ---------------------------------------------------------------------
+# Clinical LangGraph / grounded generation settings (Milestone E)
+# ---------------------------------------------------------------------
+
+
+def test_clinical_settings_have_sane_defaults() -> None:
+    settings = Settings(_env_file=None, database_url=DATABASE_URL)
+
+    assert settings.evidence_sufficient_threshold == DEFAULT_EVIDENCE_SUFFICIENT_THRESHOLD
+    assert settings.evidence_partial_threshold == DEFAULT_EVIDENCE_PARTIAL_THRESHOLD
+    assert settings.evidence_target_count == DEFAULT_EVIDENCE_TARGET_COUNT
+    assert settings.evidence_target_source_count == DEFAULT_EVIDENCE_TARGET_SOURCE_COUNT
+    assert settings.confidence_high_threshold == DEFAULT_CONFIDENCE_HIGH_THRESHOLD
+    assert settings.confidence_moderate_threshold == DEFAULT_CONFIDENCE_MODERATE_THRESHOLD
+    assert (
+        settings.severe_hallucination_rate_threshold
+        == DEFAULT_SEVERE_HALLUCINATION_RATE_THRESHOLD
+    )
+    assert settings.generation_model == DEFAULT_GENERATION_MODEL
+    assert settings.generation_temperature == DEFAULT_GENERATION_TEMPERATURE
+    assert settings.generation_timeout_seconds == DEFAULT_GENERATION_TIMEOUT_SECONDS
+    assert settings.max_regeneration_attempts == DEFAULT_MAX_REGENERATION_ATTEMPTS
+
+
+def test_clinical_settings_are_overridable_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVIDENCE_SUFFICIENT_THRESHOLD", "0.7")
+    monkeypatch.setenv("EVIDENCE_PARTIAL_THRESHOLD", "0.4")
+    monkeypatch.setenv("CONFIDENCE_HIGH_THRESHOLD", "0.85")
+    monkeypatch.setenv("CONFIDENCE_MODERATE_THRESHOLD", "0.55")
+    monkeypatch.setenv("SEVERE_HALLUCINATION_RATE_THRESHOLD", "0.25")
+    monkeypatch.setenv("GENERATION_MODEL", "gpt-4o")
+    monkeypatch.setenv("GENERATION_TEMPERATURE", "0.2")
+    monkeypatch.setenv("MAX_REGENERATION_ATTEMPTS", "2")
+
+    settings = Settings(_env_file=None, database_url=DATABASE_URL)
+
+    assert settings.evidence_sufficient_threshold == 0.7
+    assert settings.evidence_partial_threshold == 0.4
+    assert settings.confidence_high_threshold == 0.85
+    assert settings.confidence_moderate_threshold == 0.55
+    assert settings.severe_hallucination_rate_threshold == 0.25
+    assert settings.generation_model == "gpt-4o"
+    assert settings.generation_temperature == 0.2
+    assert settings.max_regeneration_attempts == 2
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"evidence_sufficient_threshold": 1.5},
+        {"evidence_target_count": 0},
+        {"confidence_high_threshold": -0.1},
+        {"generation_timeout_seconds": 0},
+        {"max_regeneration_attempts": -1},
+    ],
+)
+def test_clinical_settings_reject_out_of_range_values(kwargs: dict) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, database_url=DATABASE_URL, **kwargs)

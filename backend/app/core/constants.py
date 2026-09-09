@@ -47,3 +47,40 @@ DEFAULT_RERANKER_TOP_K = 5
 # app.retrieval.reranker.CrossEncoderReranker, which loads it lazily and
 # only when reranking is actually attempted.
 DEFAULT_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+
+# --- Clinical LangGraph / grounded generation (Milestone E) ------------
+#
+# These mirror the constructor defaults already defined on the
+# corresponding dataclasses (EvidenceSufficiencyConfig, ConfidenceConfig,
+# ClinicalGraphDependencies) - having them here as well lets
+# app.core.config.Settings expose them as env-configurable without
+# duplicating the actual threshold *values* in two places by accident:
+# both the dataclass defaults and the Settings defaults below read from
+# this one module.
+
+# Evidence sufficiency (app.clinical.evidence_sufficiency).
+DEFAULT_EVIDENCE_SUFFICIENT_THRESHOLD = 0.65
+DEFAULT_EVIDENCE_PARTIAL_THRESHOLD = 0.35
+DEFAULT_EVIDENCE_TARGET_COUNT = 3
+DEFAULT_EVIDENCE_TARGET_SOURCE_COUNT = 2
+
+# Confidence scoring (app.clinical.confidence).
+DEFAULT_CONFIDENCE_HIGH_THRESHOLD = 0.80
+DEFAULT_CONFIDENCE_MODERATE_THRESHOLD = 0.60
+DEFAULT_SEVERE_HALLUCINATION_RATE_THRESHOLD = 0.30
+
+# Grounded generation (app.clinical.llm / app.clinical.graph). Not one of
+# the embedding-model constants above - this is a chat/completions model
+# used for structured clinical generation, a separate concern from
+# DEFAULT_EMBEDDING_MODEL.
+DEFAULT_GENERATION_MODEL = "gpt-4o-mini"
+DEFAULT_GENERATION_TEMPERATURE = 0.0
+DEFAULT_GENERATION_TIMEOUT_SECONDS = 30.0
+
+# Regeneration is capped at exactly one retry by default (Phase 5
+# constraint: "maximum one regeneration attempt globally for the
+# request") - see app.clinical.graph._route_after_citation_validation,
+# which makes a second, unbounded loop structurally impossible regardless
+# of this value.
+DEFAULT_MAX_REGENERATION_ATTEMPTS = 1

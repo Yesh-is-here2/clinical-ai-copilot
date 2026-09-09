@@ -5,10 +5,21 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.constants import (
+    DEFAULT_CONFIDENCE_HIGH_THRESHOLD,
+    DEFAULT_CONFIDENCE_MODERATE_THRESHOLD,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EVIDENCE_PARTIAL_THRESHOLD,
+    DEFAULT_EVIDENCE_SUFFICIENT_THRESHOLD,
+    DEFAULT_EVIDENCE_TARGET_COUNT,
+    DEFAULT_EVIDENCE_TARGET_SOURCE_COUNT,
+    DEFAULT_GENERATION_MODEL,
+    DEFAULT_GENERATION_TEMPERATURE,
+    DEFAULT_GENERATION_TIMEOUT_SECONDS,
+    DEFAULT_MAX_REGENERATION_ATTEMPTS,
     DEFAULT_RERANKER_MODEL,
     DEFAULT_RERANKER_TOP_K,
     DEFAULT_RRF_K,
+    DEFAULT_SEVERE_HALLUCINATION_RATE_THRESHOLD,
 )
 
 
@@ -43,6 +54,39 @@ class Settings(BaseSettings):
     # failing the request. Set this False to skip reranking by design
     # (not as a failure) instead.
     reranker_enabled: bool = Field(default=True)
+
+    # --- Clinical LangGraph / grounded generation (Milestone E) -------
+    evidence_sufficient_threshold: float = Field(
+        default=DEFAULT_EVIDENCE_SUFFICIENT_THRESHOLD, ge=0.0, le=1.0
+    )
+    evidence_partial_threshold: float = Field(
+        default=DEFAULT_EVIDENCE_PARTIAL_THRESHOLD, ge=0.0, le=1.0
+    )
+    evidence_target_count: int = Field(default=DEFAULT_EVIDENCE_TARGET_COUNT, gt=0)
+    evidence_target_source_count: int = Field(
+        default=DEFAULT_EVIDENCE_TARGET_SOURCE_COUNT, gt=0
+    )
+
+    confidence_high_threshold: float = Field(
+        default=DEFAULT_CONFIDENCE_HIGH_THRESHOLD, ge=0.0, le=1.0
+    )
+    confidence_moderate_threshold: float = Field(
+        default=DEFAULT_CONFIDENCE_MODERATE_THRESHOLD, ge=0.0, le=1.0
+    )
+    severe_hallucination_rate_threshold: float = Field(
+        default=DEFAULT_SEVERE_HALLUCINATION_RATE_THRESHOLD, ge=0.0, le=1.0
+    )
+
+    # Chat/completions model used for structured clinical generation -
+    # deliberately separate from `embedding_model` above (a different
+    # OpenAI API surface). Uses the same `openai_api_key` field; no
+    # additional secret is introduced for Milestone E.
+    generation_model: str = Field(default=DEFAULT_GENERATION_MODEL)
+    generation_temperature: float = Field(default=DEFAULT_GENERATION_TEMPERATURE, ge=0.0)
+    generation_timeout_seconds: float = Field(
+        default=DEFAULT_GENERATION_TIMEOUT_SECONDS, gt=0.0
+    )
+    max_regeneration_attempts: int = Field(default=DEFAULT_MAX_REGENERATION_ATTEMPTS, ge=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",
