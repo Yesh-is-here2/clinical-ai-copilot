@@ -38,6 +38,7 @@
 
     volumes:
       - ./data:/app/data:ro
+      - ./data/guidelines/processed:/app/data/guidelines/processed
 
     depends_on:
       postgres:
