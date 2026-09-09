@@ -36,9 +36,13 @@
     ports:
       - "8000:8000"
 
+    volumes:
+      - ./data:/app/data:ro
+
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   clinical_ai_postgres_data:
+
