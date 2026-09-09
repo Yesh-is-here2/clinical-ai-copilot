@@ -1,0 +1,25 @@
+# Optional extra for REAL cross-encoder reranking (Milestone D).
+#
+# NOT installed by default, and NOT part of requirements.txt or
+# requirements-dev.txt: sentence-transformers pulls in torch, which adds
+# several hundred MB (more with CUDA wheels) to the image - a cost that
+# should be an explicit, deliberate choice, not something every build
+# pays for.
+#
+# app.retrieval.reranker.CrossEncoderReranker imports sentence_transformers
+# lazily, only inside its _load_model() method, only when a real rerank
+# is actually attempted - never at module import time, never during
+# `pytest` (which uses the deterministic FakeReranker instead - see
+# tests/test_reranker.py and tests/test_hybrid_retrieval.py). Without
+# this extra installed, CrossEncoderReranker.score() raises
+# RerankerNotAvailableError, and HybridRetrievalService (see
+# app.retrieval.hybrid) falls back to fused-only results with explicit
+# degradation metadata rather than failing the request - the app runs
+# fine, just without real reranking, until this is installed.
+#
+# Install with:
+#   pip install -r requirements.txt -r requirements-reranker.txt
+# or build the backend image with:
+#   docker compose build backend --build-arg INSTALL_RERANKER=true
+# (see backend/Dockerfile)
+sentence-transformers>=3.0,<4.0

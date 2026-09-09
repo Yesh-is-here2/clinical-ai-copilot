@@ -10,13 +10,25 @@ ENV PYTHONUNBUFFERED=1
 # reportlab, etc.
 ARG INSTALL_DEV=false
 
+# Optional, off by default: pulls in sentence-transformers/torch for real
+# cross-encoder reranking (Milestone D - see
+# backend/requirements-reranker.txt and app.retrieval.reranker). Leaving
+# this false keeps the image lean; HybridRetrievalService still works
+# without it, it just falls back to fused (non-reranked) results with
+# explicit degradation metadata. Build with
+# `--build-arg INSTALL_RERANKER=true` to enable real reranking.
+ARG INSTALL_RERANKER=false
+
 WORKDIR /app
 
-COPY requirements.txt requirements-dev.txt ./
+COPY requirements.txt requirements-dev.txt requirements-reranker.txt ./
 
 RUN pip install --no-cache-dir --upgrade -r requirements.txt \
     && if [ "$INSTALL_DEV" = "true" ]; then \
         pip install --no-cache-dir --upgrade -r requirements-dev.txt; \
+    fi \
+    && if [ "$INSTALL_RERANKER" = "true" ]; then \
+        pip install --no-cache-dir --upgrade -r requirements-reranker.txt; \
     fi
 
 COPY app ./app

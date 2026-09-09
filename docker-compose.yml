@@ -35,6 +35,13 @@
       # once one exists.
       args:
         INSTALL_DEV: "true"
+        # Real cross-encoder reranking (Milestone D) is an optional,
+        # heavier extra (sentence-transformers + torch) and is
+        # deliberately left off here - HybridRetrievalService falls back
+        # to fused (non-reranked) results with explicit degradation
+        # metadata when it's not installed. Uncomment to enable it
+        # locally:
+        # INSTALL_RERANKER: "true"
 
     container_name: clinical-ai-backend
     restart: unless-stopped

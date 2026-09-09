@@ -53,6 +53,16 @@ class BM25Config:
 class BM25Result:
     chunk_id: str
     document_id: str
+    # Provenance fields beyond chunk_id/document_id (Milestone D): needed
+    # so app.retrieval.fusion can build a fully-populated RetrievedEvidence
+    # from a BM25-only hit, without a separate DB lookup just to fill in
+    # title/organization/source_url/section - the source DocumentChunk
+    # already carries them (see app.schemas.document.DocumentChunk).
+    document_title: str
+    organization: str
+    source_url: str
+    section_id: str | None
+    section_heading: str | None
     text: str
     score: float
     rank: int
@@ -199,6 +209,11 @@ class BM25Index:
                 BM25Result(
                     chunk_id=chunk_id,
                     document_id=chunk.document_id,
+                    document_title=chunk.document_title,
+                    organization=chunk.organization,
+                    source_url=str(chunk.source_url),
+                    section_id=chunk.section_id,
+                    section_heading=chunk.section_heading,
                     text=chunk.text,
                     score=score,
                     rank=rank,

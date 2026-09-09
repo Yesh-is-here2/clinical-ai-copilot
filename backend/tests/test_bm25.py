@@ -144,6 +144,24 @@ def test_results_carry_provenance_fields() -> None:
     assert result.score > 0
 
 
+def test_results_carry_document_and_section_metadata_for_fusion() -> None:
+    # Milestone D's RRF fusion (app.retrieval.fusion) needs title/
+    # organization/source_url/section directly off BM25Result so a
+    # BM25-only hit can be turned into a fully-populated RetrievedEvidence
+    # without a separate lookup.
+    index = BM25Index([make_chunk("c1", "hypertension diagnosis evidence")])
+
+    result = index.search("hypertension")[0]
+
+    assert result.document_title == "Test Guideline"
+    assert result.organization == "Example Org"
+    assert result.source_url == "https://example.org/guideline"
+    # make_chunk() doesn't set section_id/section_heading - both should
+    # come through as None rather than raising.
+    assert result.section_id is None
+    assert result.section_heading is None
+
+
 # ---------------------------------------------------------------------
 # Determinism / stable tie-breaking
 # ---------------------------------------------------------------------

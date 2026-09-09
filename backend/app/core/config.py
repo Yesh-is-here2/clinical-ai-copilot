@@ -4,7 +4,12 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.constants import DEFAULT_EMBEDDING_MODEL
+from app.core.constants import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_RERANKER_MODEL,
+    DEFAULT_RERANKER_TOP_K,
+    DEFAULT_RRF_K,
+)
 
 
 class Settings(BaseSettings):
@@ -24,6 +29,20 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL)
     semantic_top_k: int = Field(default=15, gt=0)
     bm25_top_k: int = Field(default=15, gt=0)
+
+    # --- Hybrid retrieval / reranking (Milestone D) -------------------
+    rrf_k: int = Field(default=DEFAULT_RRF_K, gt=0)
+    reranker_top_k: int = Field(default=DEFAULT_RERANKER_TOP_K, gt=0)
+    reranker_model: str = Field(default=DEFAULT_RERANKER_MODEL)
+    # Whether hybrid retrieval should attempt reranking at all. Note this
+    # is independent of whether a real reranker can actually be loaded -
+    # the optional sentence-transformers/torch dependency (see
+    # backend/requirements-reranker.txt) may not be installed even when
+    # this is True, in which case HybridRetrievalService falls back to
+    # fused-only results with explicit degradation metadata rather than
+    # failing the request. Set this False to skip reranking by design
+    # (not as a failure) instead.
+    reranker_enabled: bool = Field(default=True)
 
     model_config = SettingsConfigDict(
         env_file=".env",

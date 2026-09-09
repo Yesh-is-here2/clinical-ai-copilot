@@ -26,3 +26,24 @@ DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 # code) so it is one clear import: `from app.core.constants import
 # DEFAULT_EMBEDDING_DIMENSIONS`.
 DEFAULT_EMBEDDING_DIMENSIONS = EMBEDDING_MODEL_DIMENSIONS[DEFAULT_EMBEDDING_MODEL]
+
+
+# --- Hybrid retrieval / reranking (Milestone D) -----------------------
+
+# Standard Reciprocal Rank Fusion smoothing constant. The original RRF
+# paper, and most production hybrid-search implementations, use k=60 -
+# large enough that a result ranked #1 by only one retriever doesn't
+# completely dominate the fused ranking over a result ranked well by
+# both retrievers.
+DEFAULT_RRF_K = 60
+
+# How many reranked results a hybrid retrieval call returns by default.
+DEFAULT_RERANKER_TOP_K = 5
+
+# cross-encoder/ms-marco-MiniLM-L-6-v2: a small (~80MB), well-established
+# MS MARCO-trained cross-encoder - a reasonable default for reranking
+# short clinical-guideline passages without requiring a GPU. Not
+# downloaded or imported anywhere at startup - see
+# app.retrieval.reranker.CrossEncoderReranker, which loads it lazily and
+# only when reranking is actually attempted.
+DEFAULT_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"

@@ -5,6 +5,9 @@ from app.core.config import Settings
 from app.core.constants import (
     DEFAULT_EMBEDDING_DIMENSIONS,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_RERANKER_MODEL,
+    DEFAULT_RERANKER_TOP_K,
+    DEFAULT_RRF_K,
     EMBEDDING_MODEL_DIMENSIONS,
 )
 
@@ -121,3 +124,55 @@ def test_default_embedding_dimensions_matches_the_default_model() -> None:
         == EMBEDDING_MODEL_DIMENSIONS[DEFAULT_EMBEDDING_MODEL]
     )
     assert DEFAULT_EMBEDDING_DIMENSIONS == 1536
+
+
+# ---------------------------------------------------------------------
+# Hybrid retrieval / reranking settings (Milestone D)
+# ---------------------------------------------------------------------
+
+
+def test_hybrid_retrieval_settings_have_sane_defaults() -> None:
+    settings = Settings(_env_file=None, database_url=DATABASE_URL)
+
+    assert settings.rrf_k == DEFAULT_RRF_K == 60
+    assert settings.reranker_top_k == DEFAULT_RERANKER_TOP_K == 5
+    assert settings.reranker_model == DEFAULT_RERANKER_MODEL
+    assert settings.reranker_enabled is True
+
+
+def test_rrf_k_rejects_non_positive_values() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, database_url=DATABASE_URL, rrf_k=0)
+
+
+def test_reranker_top_k_rejects_non_positive_values() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, database_url=DATABASE_URL, reranker_top_k=0)
+
+
+def test_hybrid_retrieval_settings_are_overridable_via_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RRF_K", "30")
+    monkeypatch.setenv("RERANKER_TOP_K", "8")
+    monkeypatch.setenv("RERANKER_MODEL", "some-other/cross-encoder")
+    monkeypatch.setenv("RERANKER_ENABLED", "false")
+
+    settings = Settings(_env_file=None, database_url=DATABASE_URL)
+
+    assert settings.rrf_k == 30
+    assert settings.reranker_top_k == 8
+    assert settings.reranker_model == "some-other/cross-encoder"
+    assert settings.reranker_enabled is False
+
+
+def test_blank_env_reranker_model_normalizes_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same env_ignore_empty behavior verified for embedding_model above -
+    # a blank RERANKER_MODEL= in .env must not shadow the code default.
+    monkeypatch.setenv("RERANKER_MODEL", "")
+
+    settings = Settings(_env_file=None, database_url=DATABASE_URL)
+
+    assert settings.reranker_model == DEFAULT_RERANKER_MODEL
