@@ -26,6 +26,15 @@
     build:
       context: ./backend
       dockerfile: Dockerfile
+      # This compose file is the local development stack, so it builds
+      # with the test toolchain included: `docker compose exec backend
+      # pytest -q` is the canonical local verification command and must
+      # work without a separate rebuild. A production build should
+      # override this (e.g. `docker compose build --build-arg
+      # INSTALL_DEV=false backend`, or a dedicated prod compose file)
+      # once one exists.
+      args:
+        INSTALL_DEV: "true"
 
     container_name: clinical-ai-backend
     restart: unless-stopped
