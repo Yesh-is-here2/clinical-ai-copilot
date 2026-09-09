@@ -21,6 +21,9 @@ RUN pip install --no-cache-dir --upgrade -r requirements.txt \
 
 COPY app ./app
 COPY tests ./tests
+COPY pytest.ini .
+COPY alembic.ini .
+COPY alembic ./alembic
 
 EXPOSE 8000
 

@@ -11,6 +11,10 @@ beautifulsoup4>=4.12,<5.0
 pypdf>=6.0,<7.0
 tiktoken>=0.8,<1.0
 
+alembic>=1.13,<2.0
+pgvector>=0.3,<1.0
+openai>=1.50,<2.0
+
 # Required at runtime (not just for tests): pypdf relies on fontTools for
 # reliable font/glyph processing when extracting text from real-world
 # guideline PDFs (e.g. the WHO hypertension publication) that embed
