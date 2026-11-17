@@ -3,8 +3,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.routes.clinical import router as clinical_router
+from app.api.routes.documents import router as documents_router
 from app.api.routes.health import router as health_router
 from app.api.routes.patients import router as patients_router
+from app.api.routes.queries import router as queries_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
@@ -44,6 +47,9 @@ app.add_middleware(RequestContextMiddleware)
 
 app.include_router(health_router)
 app.include_router(patients_router)
+app.include_router(clinical_router)
+app.include_router(queries_router)
+app.include_router(documents_router)
 
 
 @app.get("/", tags=["Root"])

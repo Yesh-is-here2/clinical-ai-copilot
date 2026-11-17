@@ -1,10 +1,10 @@
-﻿from fastapi import APIRouter, HTTPException, status
+﻿from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from app.api.deps import get_patient_service
 from app.schemas.patient import PatientContext
-from app.services.patient import (
-    PatientNotFoundError,
-    patient_service,
-)
+from app.services.patient import PatientNotFoundError, PatientService
 
 
 router = APIRouter(
@@ -18,7 +18,9 @@ router = APIRouter(
     response_model=list[PatientContext],
     summary="List synthetic patients",
 )
-async def list_patients() -> list[PatientContext]:
+async def list_patients(
+    patient_service: Annotated[PatientService, Depends(get_patient_service)],
+) -> list[PatientContext]:
     return patient_service.list_patients()
 
 
@@ -27,7 +29,10 @@ async def list_patients() -> list[PatientContext]:
     response_model=PatientContext,
     summary="Get synthetic patient context",
 )
-async def get_patient(patient_id: str) -> PatientContext:
+async def get_patient(
+    patient_id: str,
+    patient_service: Annotated[PatientService, Depends(get_patient_service)],
+) -> PatientContext:
     try:
         return patient_service.get_patient(patient_id)
     except PatientNotFoundError as exc:
