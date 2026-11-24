@@ -32,6 +32,7 @@ from app.models.document import (
     DocumentChunkRecord,
     DocumentEmbeddingRecord,
 )
+from app.models.query import QueryRecord
 from app.retrieval.vector_search import VectorSearchService
 from app.services.embedding_persistence import (
     EmbeddingPersistenceService,
@@ -70,11 +71,22 @@ async def _delete_test_owned_rows(session: AsyncSession) -> None:
     app/models/document.py), so deleting the parent row is sufficient -
     no separate chunk/embedding cleanup, and no risk of leaving orphans.
 
+    Queries go FIRST: citations.chunk_id is ondelete=RESTRICT by design,
+    so a leftover citation from another module's run blocks deleting
+    its chunk. Deleting itest- queries cascades through
+    generated_responses to citations, and only then is it safe to
+    delete the documents.
+
     Deliberately does NOT drop/recreate any table, downgrade Alembic, or
     touch anything outside the `itest-` id space: the schema here is the
     same one `docker compose exec backend alembic upgrade head` already
     created, and this suite must not assume ownership of it.
     """
+    await session.execute(
+        delete(QueryRecord).where(
+            QueryRecord.request_id.like(f"{_TEST_DOCUMENT_ID_PREFIX}%")
+        )
+    )
     await session.execute(
         delete(ClinicalDocumentRecord).where(
             ClinicalDocumentRecord.document_id.like(f"{_TEST_DOCUMENT_ID_PREFIX}%")

@@ -59,17 +59,18 @@ _PREFIX = "itest-"
 
 
 async def _delete_test_owned_rows(session: AsyncSession) -> None:
-    # document_chunks/document_embeddings cascade off clinical_documents;
-    # retrieval_results/generated_responses/citations cascade off queries
-    # (see app/models/query.py's ondelete=CASCADE) - deleting the two
-    # parent rows by their itest- prefix is sufficient.
+    # Order matters: citations.chunk_id is ondelete=RESTRICT by design
+    # (a cited chunk must not silently disappear), so queries must go
+    # FIRST - deleting a query cascades through generated_responses to
+    # citations. Only then is it safe to delete clinical_documents,
+    # which cascades to document_chunks/document_embeddings.
+    await session.execute(
+        delete(QueryRecord).where(QueryRecord.request_id.like(f"{_PREFIX}%"))
+    )
     await session.execute(
         delete(ClinicalDocumentRecord).where(
             ClinicalDocumentRecord.document_id.like(f"{_PREFIX}%")
         )
-    )
-    await session.execute(
-        delete(QueryRecord).where(QueryRecord.request_id.like(f"{_PREFIX}%"))
     )
     await session.execute(
         delete(AuditLogRecord).where(AuditLogRecord.request_id.like(f"{_PREFIX}%"))
