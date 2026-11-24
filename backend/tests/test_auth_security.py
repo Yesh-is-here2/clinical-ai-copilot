@@ -586,6 +586,24 @@ def test_login_rejects_short_password_with_422() -> None:
     assert response.status_code == 422
 
 
+def test_login_never_leaks_token_or_password_into_logs(caplog) -> None:
+    user = _make_user()
+    _override_session(_FakeSession([user]))
+    _override_settings(_settings())
+
+    with caplog.at_level("INFO", logger="clinical_ai"):
+        with TestClient(main_module.app) as client:
+            response = client.post(
+                "/auth/login",
+                json={"email": user.email, "password": "correct horse"},
+            )
+
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    assert token not in caplog.text
+    assert "correct horse" not in caplog.text
+
+
 # ---------------------------------------------------------------------
 # Middleware controls
 # ---------------------------------------------------------------------
