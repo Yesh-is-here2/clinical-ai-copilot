@@ -27,3 +27,9 @@ fonttools>=4.50,<5.0
 # fast-moving pre-1.0-conventions package API-wise; re-pin deliberately,
 # not by a routine dependency bump.
 langgraph>=1.0,<2.0
+
+# Authentication / RBAC (Phase 7): maintained password hashing
+# (bcrypt) and JWT handling (PyJWT). No passlib (unmaintained) and no
+# fake JWT logic anywhere.
+PyJWT>=2.8,<3.0
+bcrypt>=4.1,<5.0

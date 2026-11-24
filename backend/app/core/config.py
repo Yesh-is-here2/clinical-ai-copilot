@@ -88,6 +88,28 @@ class Settings(BaseSettings):
     )
     max_regeneration_attempts: int = Field(default=DEFAULT_MAX_REGENERATION_ATTEMPTS, ge=0)
 
+    # --- Authentication / RBAC (Phase 7) -------------------------------
+    # The JWT secret development default is deliberately insecure so
+    # the app and the whole test suite keep working with no .env at
+    # all; production startup rejects it - see
+    # app.core.security.validate_security_settings (called from the
+    # lifespan in app.main). A blank value normalizes to this
+    # placeholder via env_ignore_empty, so production must set a real
+    # secret explicitly.
+    jwt_secret: str = Field(default="dev-only-insecure-change-me-in-production")
+    jwt_algorithm: str = Field(default="HS256")
+    access_token_expire_minutes: int = Field(default=30, gt=0)
+    # Browser cross-origin access is closed by default: CORSMiddleware
+    # is only installed when this list is non-empty (see app.main).
+    # Production must name its frontend origin(s) explicitly.
+    cors_allow_origins: list[str] = Field(default_factory=list)
+    # Login brute-force protection (Phase 7, section 7.6). Counts
+    # failed attempts per (client IP, email); a successful login
+    # clears the counter for that key.
+    login_rate_limit_enabled: bool = Field(default=True)
+    login_rate_limit_max_attempts: int = Field(default=10, gt=0)
+    login_rate_limit_window_seconds: int = Field(default=60, gt=0)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
