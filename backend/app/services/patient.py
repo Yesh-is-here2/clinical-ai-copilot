@@ -47,6 +47,21 @@ class PatientService:
             ) from exc
 
 
-patient_service = PatientService(
-    data_dir="/app/data/fhir/patients"
-)
+def _default_data_dir() -> Path:
+    """Resolve the synthetic-patient fixture directory.
+
+    Docker is canonical (``/app/data/fhir/patients``), but the default
+    test suite must also run from a plain checkout (e.g. a laptop
+    without Docker, or CI without the mounted volume) - so fall back
+    to the repo-relative ``data/fhir/patients`` when the Docker path
+    does not exist. Docker behaviour is unchanged: the Docker path
+    wins whenever it exists.
+    """
+
+    docker_dir = Path("/app/data/fhir/patients")
+    if docker_dir.exists():
+        return docker_dir
+    return Path(__file__).resolve().parents[3] / "data" / "fhir" / "patients"
+
+
+patient_service = PatientService(data_dir=_default_data_dir())

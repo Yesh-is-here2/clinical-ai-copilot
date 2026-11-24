@@ -27,7 +27,7 @@ from app.db.repositories.query_repository import (
     RetrievedEvidenceInput,
     build_citation_status_map,
 )
-from app.retrieval.hybrid import RetrievalComponentStatus
+from app.retrieval.fusion import RetrievedEvidence
 from app.schemas.clinical import ClinicalQueryRequest, ClinicalQueryResponse
 from app.schemas.patient import PatientContext
 from app.services.patient import PatientNotFoundError, PatientService
@@ -104,11 +104,27 @@ class ClinicalQueryService:
             "stage_timings": {},
         }
 
-        result_state = await graph.ainvoke(initial_state)
+        query_id = uuid.uuid4()
+
+        try:
+            result_state = await graph.ainvoke(initial_state)
+        except Exception:
+            # Section 7: an unexpected graph failure must still be
+            # recorded when the database is available, so a failed
+            # request never vanishes without a trace. The recording
+            # itself is best-effort - if it also fails, the original
+            # exception still propagates (the route maps it to a 500)
+            # rather than being replaced by a persistence error.
+            await self._record_failure(
+                query_id=query_id,
+                request_id=request_id,
+                request=request,
+                patient_context=patient_context,
+            )
+            raise
+
         final_response = result_state["final_response"]
         status = result_state.get("terminal_reason") or "normal"
-
-        query_id = uuid.uuid4()
 
         try:
             await self._persist(
@@ -127,6 +143,8 @@ class ClinicalQueryService:
                 "persisted."
             ) from exc
 
+        retrieval_result = result_state.get("retrieval_result")
+
         return ClinicalQueryResponse(
             query_id=query_id,
             request_id=final_response.request_id,
@@ -142,7 +160,38 @@ class ClinicalQueryService:
             warnings=final_response.warnings,
             safety_flags=final_response.safety_flags,
             disclaimer=final_response.disclaimer,
+            degraded=bool(
+                retrieval_result is not None and retrieval_result.degraded
+            ),
         )
+
+    async def _record_failure(
+        self,
+        *,
+        query_id: uuid.UUID,
+        request_id: str,
+        request: ClinicalQueryRequest,
+        patient_context: PatientContext | None,
+    ) -> None:
+        """Best-effort minimal ``queries`` row for a graph that raised.
+
+        Never raises: the caller re-raises the original graph
+        exception, and a failure to record must not replace it.
+        """
+
+        try:
+            await self._session.rollback()
+            repository = ClinicalQueryRepository(self._session)
+            await repository.ensure_patient_synced(patient_context)
+            await repository.record_failed_query(
+                query_id=query_id,
+                request_id=request_id,
+                patient_id=request.patient_id,
+                question=request.question,
+            )
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
 
     async def _persist(
         self,
@@ -156,37 +205,20 @@ class ClinicalQueryService:
     ) -> None:
         final_response = result_state["final_response"]
         question_category = result_state.get("question_category")
-        retrieval_result = result_state.get("retrieval_result")
         retrieved_evidence = result_state.get("retrieved_evidence") or []
         citation_validation = result_state.get("citation_validation")
         total_elapsed = result_state.get("total_elapsed_seconds")
 
-        method = (
-            "reranked"
-            if retrieval_result is not None
-            and retrieval_result.reranker.status is RetrievalComponentStatus.SUCCESS
-            and retrieval_result.reranked
-            else "fused"
-        )
-
-        retrieval_rows = [
-            RetrievedEvidenceInput(
-                chunk_id=evidence.chunk_id,
-                retrieval_method=method,
-                rank=(
-                    evidence.reranker_rank
-                    if evidence.reranker_rank is not None
-                    else evidence.fused_rank
-                ),
-                score=(
-                    evidence.reranker_score
-                    if evidence.reranker_score is not None
-                    else evidence.rrf_score
-                ),
-                reranker_score=evidence.reranker_score,
-            )
-            for evidence in retrieved_evidence
-        ]
+        # One row per (chunk, retrieval method) - see
+        # app.models.query.RetrievalResultRecord: the unique key is
+        # (query_id, chunk_id, retrieval_method) precisely so the
+        # evidence-inspector view can show, for one chunk, its BM25
+        # rank/score, its vector rank/score, its fused RRF rank/score,
+        # and - when reranking actually ran - its reranker rank/score
+        # side by side. Collapsing those into a single "fused or
+        # reranked" row (as an earlier draft did) silently discards
+        # the per-component provenance section 4 requires.
+        retrieval_rows = _build_retrieval_rows(retrieved_evidence)
 
         model_name = (
             self._graph_dependencies.llm_provider.model
@@ -220,3 +252,66 @@ class ClinicalQueryService:
         # file-backed, never inserted into that table.
         await repository.ensure_patient_synced(patient_context)
         await repository.persist_query(data)
+
+
+def _build_retrieval_rows(
+    retrieved_evidence: list[RetrievedEvidence],
+) -> list[RetrievedEvidenceInput]:
+    """Expand fused evidence into one row per retrieval method.
+
+    A chunk that both retrievers surfaced gets a ``bm25`` row (its
+    keyword rank/score), a ``semantic`` row (its vector rank/score),
+    and always a ``fused`` row (its RRF rank/score); a chunk the
+    reranker actually scored additionally gets a ``reranked`` row
+    carrying the reranker rank/score. A component that never touched
+    the chunk contributes no row - its absence is itself the
+    provenance (never a fabricated rank/score).
+    """
+
+    rows: list[RetrievedEvidenceInput] = []
+
+    for evidence in retrieved_evidence:
+        if (
+            evidence.keyword_rank is not None
+            and evidence.keyword_score is not None
+        ):
+            rows.append(
+                RetrievedEvidenceInput(
+                    chunk_id=evidence.chunk_id,
+                    retrieval_method="bm25",
+                    rank=evidence.keyword_rank,
+                    score=evidence.keyword_score,
+                )
+            )
+        if evidence.vector_rank is not None and evidence.vector_score is not None:
+            rows.append(
+                RetrievedEvidenceInput(
+                    chunk_id=evidence.chunk_id,
+                    retrieval_method="semantic",
+                    rank=evidence.vector_rank,
+                    score=evidence.vector_score,
+                )
+            )
+        rows.append(
+            RetrievedEvidenceInput(
+                chunk_id=evidence.chunk_id,
+                retrieval_method="fused",
+                rank=evidence.fused_rank,
+                score=evidence.rrf_score,
+            )
+        )
+        if (
+            evidence.reranker_rank is not None
+            and evidence.reranker_score is not None
+        ):
+            rows.append(
+                RetrievedEvidenceInput(
+                    chunk_id=evidence.chunk_id,
+                    retrieval_method="reranked",
+                    rank=evidence.reranker_rank,
+                    score=evidence.reranker_score,
+                    reranker_score=evidence.reranker_score,
+                )
+            )
+
+    return rows
