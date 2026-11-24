@@ -23,11 +23,13 @@ this milestone's job.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+import uuid
+from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends
-from pydantic import BaseModel
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,12 +41,15 @@ from app.clinical.graph import (
 )
 from app.clinical.llm import OpenAIStructuredLLMProvider, StructuredLLMProvider
 from app.core.config import Settings, settings as _default_settings
+from app.core.security import TokenValidationError, decode_access_token
 from app.db.repositories.audit_repository import SqlAlchemyAuditLogWriter
 from app.db.repositories.document_repository import DocumentRepository
 from app.db.repositories.evaluation_repository import EvaluationRepository
 from app.db.repositories.query_repository import ClinicalQueryRepository
+from app.db.repositories.user_repository import UserRepository
 from app.db.session import get_db_session
 from app.models.document import ClinicalDocumentRecord, DocumentChunkRecord
+from app.models.user import User, UserRole
 from app.retrieval.bm25 import BM25Index
 from app.retrieval.hybrid import HybridRetrievalService
 from app.retrieval.reranker import CrossEncoderReranker
@@ -81,21 +86,98 @@ async def get_db(
     yield session
 
 
-class Actor(BaseModel):
-    """Placeholder for the identity Phase 7's real JWT/RBAC system will
-    eventually populate. Deliberately not implemented here: this
-    milestone must not build fake JWT logic and present it as
-    production authentication. ``get_current_actor`` always returns
-    ``None`` (anonymous) - every route in this milestone must work
-    correctly with no actor at all, so Phase 7 can add real
-    authentication as a genuinely additive change, not a rewrite."""
-
-    id: str
-    role: str
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_actor() -> Actor | None:
-    return None
+@dataclass(frozen=True)
+class Actor:
+    """The authenticated identity carried through a request (Phase 7).
+
+    Built once per request by ``get_current_actor`` from a validated
+    token + a live database row, so a role change or deactivation
+    takes effect on the next request - the token's role claim is
+    never trusted on its own. (``user_id`` is the user's UUID.)"""
+
+    user_id: uuid.UUID
+    email: str
+    role: UserRole
+
+
+def _unauthorized(detail: str) -> HTTPException:
+    """401 with a WWW-Authenticate header, as Bearer auth expects."""
+
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def get_current_user(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
+    ],
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Validate the Bearer token and return the live user row.
+
+    Raises 401 when no token is presented, the token is expired,
+    malformed, or wrongly signed, or the user does not exist or is
+    deactivated. The token's email/role claims are informational
+    only - the returned row is the authority."""
+
+    if credentials is None:
+        raise _unauthorized("Not authenticated.")
+    try:
+        payload = decode_access_token(
+            credentials.credentials,
+            secret=settings.jwt_secret,
+            algorithm=settings.jwt_algorithm,
+        )
+    except TokenValidationError as exc:
+        raise _unauthorized(str(exc)) from exc
+    user = await UserRepository(session).get_by_id(uuid.UUID(payload.subject))
+    if user is None or not user.is_active:
+        raise _unauthorized("User not found or inactive.")
+    return user
+
+
+async def get_current_actor(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Actor:
+    """The request actor: id, email, and *current database* role."""
+
+    return Actor(
+        user_id=current_user.id,
+        email=current_user.email,
+        role=current_user.role,
+    )
+
+
+def require_roles(*roles: UserRole) -> Callable[[Actor], Actor]:
+    """Dependency factory: allow only the given roles.
+
+    Authentication still runs first (401 for a bad/missing token);
+    a valid token with the wrong role gets 403. Usage::
+
+        @router.post("/documents/ingest")
+        async def ingest(actor: Actor = Depends(require_roles(UserRole.ADMIN))):
+            ...
+    """
+
+    async def _guard(
+        actor: Annotated[Actor, Depends(get_current_actor)],
+    ) -> Actor:
+        if actor.role not in roles:
+            allowed = ", ".join(role.value for role in roles)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires one of: {allowed}.",
+            )
+        return actor
+
+    return _guard
 
 
 # --- Repositories --------------------------------------------------------
