@@ -11,6 +11,7 @@ default)`` rather than assuming a key is present.
 
 from __future__ import annotations
 
+import uuid
 from typing import TypedDict
 
 from app.clinical.citation_validation import CitationValidationReport
@@ -34,6 +35,11 @@ class ClinicalState(TypedDict, total=False):
     request_id: str
     question: str
     patient_context: PatientContext | dict | None
+    # Request actor (Phase 7): set by the route via run_query's actor
+    # arguments; None for anonymous/legacy callers. Carried through
+    # so write_audit_log_node can attribute the audit row.
+    actor_user_id: uuid.UUID | None
+    actor_role: str | None
 
     # validate_input / parse_patient_context / classify_question /
     # detect_prompt_injection

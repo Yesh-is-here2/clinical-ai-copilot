@@ -17,6 +17,7 @@ thought are never stored here.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -40,6 +41,12 @@ class AuditLogEntry:
     warnings: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     stage_timings: dict[str, float] = field(default_factory=dict)
+    # Request actor (Phase 7): who asked. Defaults to None for
+    # anonymous/legacy callers (pre-Phase 7 graph runs, tests that
+    # build entries by hand). The writer maps these to
+    # AuditLogRecord.user_id/role.
+    actor_user_id: uuid.UUID | None = None
+    actor_role: str | None = None
 
 
 @runtime_checkable

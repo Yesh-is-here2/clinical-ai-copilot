@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_patient_service
+from app.api.deps import Actor, get_current_actor, get_patient_service
 from app.schemas.patient import PatientContext
 from app.services.patient import PatientNotFoundError, PatientService
 
@@ -20,7 +20,11 @@ router = APIRouter(
 )
 async def list_patients(
     patient_service: Annotated[PatientService, Depends(get_patient_service)],
+    _actor: Annotated[Actor, Depends(get_current_actor)],
 ) -> list[PatientContext]:
+    """Any authenticated user. (``_actor`` is the auth gate: the
+    dependency enforces it even though the value is unused.)"""
+
     return patient_service.list_patients()
 
 
@@ -32,6 +36,7 @@ async def list_patients(
 async def get_patient(
     patient_id: str,
     patient_service: Annotated[PatientService, Depends(get_patient_service)],
+    _actor: Annotated[Actor, Depends(get_current_actor)],
 ) -> PatientContext:
     try:
         return patient_service.get_patient(patient_id)

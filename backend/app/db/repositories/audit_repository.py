@@ -29,6 +29,7 @@ the same request.
 
 from __future__ import annotations
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clinical.audit import AuditLogEntry
@@ -47,6 +48,8 @@ class SqlAlchemyAuditLogWriter:
     async def write(self, entry: AuditLogEntry) -> None:
         record = AuditLogRecord(
             request_id=entry.request_id,
+            user_id=entry.actor_user_id,
+            role=entry.actor_role,
             patient_id=entry.patient_id,
             question=entry.question,
             model=entry.model,
@@ -62,3 +65,37 @@ class SqlAlchemyAuditLogWriter:
         self._session.add(record)
         # Deliberately no `await self._session.flush()`/`commit()` here -
         # see module docstring. The caller commits once, atomically.
+
+
+class AuditLogRepository:
+    """Read-only audit-log queries for GET /audit (Phase 7, section
+    7.7). Reviewer/admin only - the route enforces that; this class
+    just reads."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_records(
+        self,
+        *,
+        request_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditLogRecord]:
+        """Audit rows, newest first (stable order for pagination)."""
+
+        stmt = select(AuditLogRecord).order_by(
+            AuditLogRecord.created_at.desc(), AuditLogRecord.id.desc()
+        )
+        if request_id is not None:
+            stmt = stmt.where(AuditLogRecord.request_id == request_id)
+        stmt = stmt.limit(limit).offset(offset)
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def count_records(self, *, request_id: str | None = None) -> int:
+        """Total audit rows (for the list response), same filter."""
+
+        stmt = select(func.count()).select_from(AuditLogRecord)
+        if request_id is not None:
+            stmt = stmt.where(AuditLogRecord.request_id == request_id)
+        return int((await self._session.execute(stmt)).scalar_one())

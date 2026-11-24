@@ -25,6 +25,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.api.deps import (
+    Actor,
+    get_clinical_query_service,
+    require_roles,
+)
+from app.models.user import UserRole
 from app.schemas.clinical import ClinicalQueryRequest, ClinicalQueryResponse
 from app.services.clinical_query_service import (
     ClinicalQueryPersistenceError,
@@ -32,7 +38,6 @@ from app.services.clinical_query_service import (
     ClinicalRetrievalUnavailableError,
     PatientNotFoundForQueryError,
 )
-from app.api.deps import get_clinical_query_service
 
 logger = logging.getLogger("clinical_ai.clinical_api")
 
@@ -67,11 +72,22 @@ async def submit_clinical_query(
     payload: ClinicalQueryRequest,
     request: Request,
     service: Annotated[ClinicalQueryService, Depends(get_clinical_query_service)],
+    actor: Annotated[
+        Actor, Depends(require_roles(UserRole.CLINICIAN, UserRole.ADMIN))
+    ],
 ) -> ClinicalQueryResponse:
+    """Submit a clinical question. Clinicians and admins only -
+    reviewers audit past queries, they do not run new ones."""
+
     request_id = _request_id(request)
 
     try:
-        return await service.run_query(request_id=request_id, request=payload)
+        return await service.run_query(
+            request_id=request_id,
+            request=payload,
+            actor_user_id=actor.user_id,
+            actor_role=actor.role.value,
+        )
     except PatientNotFoundForQueryError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)

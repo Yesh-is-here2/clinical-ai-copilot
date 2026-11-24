@@ -42,7 +42,10 @@ from app.clinical.graph import (
 from app.clinical.llm import OpenAIStructuredLLMProvider, StructuredLLMProvider
 from app.core.config import Settings, settings as _default_settings
 from app.core.security import TokenValidationError, decode_access_token
-from app.db.repositories.audit_repository import SqlAlchemyAuditLogWriter
+from app.db.repositories.audit_repository import (
+    AuditLogRepository,
+    SqlAlchemyAuditLogWriter,
+)
 from app.db.repositories.document_repository import DocumentRepository
 from app.db.repositories.evaluation_repository import EvaluationRepository
 from app.db.repositories.query_repository import ClinicalQueryRepository
@@ -205,6 +208,15 @@ def get_audit_writer(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> AuditLogWriter:
     return SqlAlchemyAuditLogWriter(session)
+
+
+def get_audit_repository(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> AuditLogRepository:
+    """Read-only audit-log queries for GET /audit (Phase 7, section
+    7.7)."""
+
+    return AuditLogRepository(session)
 
 
 # --- Retrieval / LLM (real application composition, section 13) --------

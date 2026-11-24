@@ -748,6 +748,8 @@ def build_clinical_graph(deps: ClinicalGraphDependencies):
             warnings=final_response.warnings if final_response else [],
             reasons=confidence_result.reasons if confidence_result else [],
             stage_timings=dict(state.get("stage_timings", {})),
+            actor_user_id=state.get("actor_user_id"),
+            actor_role=state.get("actor_role"),
         )
 
         try:

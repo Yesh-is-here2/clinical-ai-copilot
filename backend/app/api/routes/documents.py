@@ -10,10 +10,9 @@ the actual SSRF/allowed-hosts enforcement lives - see
 what preserves Phase 3's source allowlisting without this route
 re-implementing or weakening it.
 
-``get_current_actor`` is wired in as a placeholder (see app.api.deps)
-so Phase 7 can add a real "must be an admin" check to this route later
-without restructuring it - this milestone deliberately does not enforce
-anything based on it.
+``get_current_actor`` is wired in as the auth gate (see app.api.deps):
+``GET /documents`` accepts any authenticated user, while
+``POST /documents/ingest`` is admin-only (Phase 7 RBAC).
 """
 
 from __future__ import annotations
@@ -27,8 +26,10 @@ from app.api.deps import (
     get_current_actor,
     get_document_ingestion_service,
     get_document_repository,
+    require_roles,
 )
 from app.db.repositories.document_repository import DocumentRepository
+from app.models.user import UserRole
 from app.schemas.clinical import (
     DocumentIngestRequest,
     DocumentIngestResponse,
@@ -51,7 +52,9 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 )
 async def list_documents(
     repository: Annotated[DocumentRepository, Depends(get_document_repository)],
+    _actor: Annotated[Actor, Depends(get_current_actor)],
 ) -> list[DocumentSummary]:
+    """Any authenticated user. (``_actor`` is the auth gate.)"""
     rows = await repository.list_documents_with_chunk_counts()
 
     return [
@@ -74,7 +77,8 @@ async def list_documents(
     response_model=DocumentIngestResponse,
     summary="Ingest one registered guideline source and persist its chunks",
     description=(
-        "Administrative capability, to be protected by RBAC in Phase 7. "
+        "Administrative capability, protected by RBAC (admin role "
+        "required). "
         "`document_id` must be a pre-registered, allowlisted guideline "
         "source (see app.retrieval.sources.GUIDELINE_SOURCES) - arbitrary "
         "URLs are never accepted. Does not generate or persist "
@@ -84,8 +88,10 @@ async def list_documents(
 async def ingest_document(
     payload: DocumentIngestRequest,
     service: Annotated[DocumentIngestionService, Depends(get_document_ingestion_service)],
-    _actor: Annotated[Actor | None, Depends(get_current_actor)],
+    _actor: Annotated[Actor, Depends(require_roles(UserRole.ADMIN))],
 ) -> DocumentIngestResponse:
+    """Admin only: ingesting a guideline source changes what the
+    system retrieves from."""
     try:
         result = await service.ingest(payload.document_id)
     except UnknownGuidelineSourceError as exc:

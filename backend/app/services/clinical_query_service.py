@@ -71,8 +71,23 @@ class ClinicalQueryService:
         self._graph_dependencies = graph_dependencies
 
     async def run_query(
-        self, *, request_id: str, request: ClinicalQueryRequest
+        self,
+        *,
+        request_id: str,
+        request: ClinicalQueryRequest,
+        actor_user_id: uuid.UUID | None = None,
+        actor_role: str | None = None,
     ) -> ClinicalQueryResponse:
+        """Run one clinical query.
+
+        ``actor_user_id``/``actor_role`` identify the authenticated
+        caller (Phase 7); both default to ``None`` for anonymous or
+        legacy callers. They are plain values, not an ``Actor`` - this
+        service layer must not import the API layer
+        (``app.api.deps`` imports this module). The actor is recorded
+        on the persisted query row and carried into the graph state so
+        the audit row is attributed to the caller."""
+
         patient_context: PatientContext | None = None
 
         if request.patient_id:
@@ -97,6 +112,8 @@ class ClinicalQueryService:
             "request_id": request_id,
             "question": request.question,
             "patient_context": patient_context,
+            "actor_user_id": actor_user_id,
+            "actor_role": actor_role,
             "warnings": [],
             "component_errors": [],
             "regeneration_count": 0,
@@ -120,6 +137,7 @@ class ClinicalQueryService:
                 request_id=request_id,
                 request=request,
                 patient_context=patient_context,
+                user_id=actor_user_id,
             )
             raise
 
@@ -134,6 +152,7 @@ class ClinicalQueryService:
                 status=status,
                 result_state=result_state,
                 patient_context=patient_context,
+                user_id=actor_user_id,
             )
             await self._session.commit()
         except SQLAlchemyError as exc:
@@ -172,6 +191,7 @@ class ClinicalQueryService:
         request_id: str,
         request: ClinicalQueryRequest,
         patient_context: PatientContext | None,
+        user_id: uuid.UUID | None = None,
     ) -> None:
         """Best-effort minimal ``queries`` row for a graph that raised.
 
@@ -188,6 +208,7 @@ class ClinicalQueryService:
                 request_id=request_id,
                 patient_id=request.patient_id,
                 question=request.question,
+                user_id=user_id,
             )
             await self._session.commit()
         except Exception:
@@ -202,6 +223,7 @@ class ClinicalQueryService:
         status: str,
         result_state: dict,
         patient_context: PatientContext | None,
+        user_id: uuid.UUID | None = None,
     ) -> None:
         final_response = result_state["final_response"]
         question_category = result_state.get("question_category")
@@ -242,6 +264,7 @@ class ClinicalQueryService:
             ),
             retrieval_rows=retrieval_rows,
             citation_status_by_id=build_citation_status_map(citation_validation),
+            user_id=user_id,
         )
 
         repository = ClinicalQueryRepository(self._session)

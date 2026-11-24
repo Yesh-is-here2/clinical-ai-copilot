@@ -15,10 +15,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_evaluation_repository, get_query_repository
+from app.api.deps import (
+    Actor,
+    get_current_actor,
+    get_evaluation_repository,
+    get_query_repository,
+    require_roles,
+)
 from app.clinical.final_response import DISCLAIMER_TEXT
 from app.db.repositories.evaluation_repository import EvaluationRepository
 from app.db.repositories.query_repository import ClinicalQueryRepository
+from app.models.user import UserRole
 from app.schemas.clinical import (
     CitationRecordOut,
     EvaluationMetricOut,
@@ -36,11 +43,28 @@ router = APIRouter(prefix="/queries", tags=["Queries"])
 )
 async def get_query(
     query_id: uuid.UUID,
+    actor: Annotated[Actor, Depends(get_current_actor)],
     repository: Annotated[ClinicalQueryRepository, Depends(get_query_repository)],
 ) -> QueryDetailResponse:
+    """Any authenticated user - but only their own queries. An admin
+    sees every query; a clinician or reviewer sees only queries they
+    submitted (plus legacy rows with no owner, which predate
+    authentication). Another user's query is indistinguishable from a
+    missing one: 404 either way, so ids cannot be probed."""
+
     record = await repository.get_by_id(query_id)
 
     if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Query '{query_id}' was not found.",
+        )
+
+    if (
+        actor.role != UserRole.ADMIN
+        and record.user_id is not None
+        and record.user_id != actor.user_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Query '{query_id}' was not found.",
@@ -89,11 +113,16 @@ async def get_query(
 )
 async def get_query_evaluation(
     query_id: uuid.UUID,
+    actor: Annotated[
+        Actor, Depends(require_roles(UserRole.REVIEWER, UserRole.ADMIN))
+    ],
     query_repository: Annotated[ClinicalQueryRepository, Depends(get_query_repository)],
     evaluation_repository: Annotated[
         EvaluationRepository, Depends(get_evaluation_repository)
     ],
 ) -> QueryEvaluationResponse:
+    """Reviewer/admin only: evaluation metrics are review material,
+    not something a clinician needs while asking questions."""
     if not await query_repository.exists(query_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

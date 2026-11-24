@@ -80,6 +80,9 @@ class PersistedQueryInput:
     latency_ms: float | None
     retrieval_rows: list["RetrievedEvidenceInput"] = field(default_factory=list)
     citation_status_by_id: dict[str, str] = field(default_factory=dict)
+    # Request actor (Phase 7): the authenticated user who asked.
+    # None for anonymous/legacy callers.
+    user_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,7 @@ class ClinicalQueryRepository:
         request_id: str,
         patient_id: str | None,
         question: str,
+        user_id: uuid.UUID | None = None,
     ) -> None:
         """Best-effort minimal row for a query whose graph raised
         unexpectedly (section 7). No ``GeneratedResponseRecord`` row:
@@ -135,6 +139,7 @@ class ClinicalQueryRepository:
             QueryRecord(
                 id=query_id,
                 request_id=request_id,
+                user_id=user_id,
                 patient_id=patient_id,
                 question=question,
                 status="error_unexpected",
@@ -145,6 +150,7 @@ class ClinicalQueryRepository:
         query_record = QueryRecord(
             id=data.query_id,
             request_id=data.request_id,
+            user_id=data.user_id,
             patient_id=data.patient_id,
             question=data.question,
             question_category=data.question_category,
