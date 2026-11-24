@@ -18,18 +18,46 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.clinical.citations import Citation
 from app.clinical.confidence import ConfidenceLabel
 from app.clinical.evidence_sufficiency import EvidenceSufficiencyStatus
+from app.clinical.final_response import DISCLAIMER_TEXT
 
 
 class ClinicalQueryRequest(BaseModel):
+    """``POST /clinical/query`` request.
+
+    ``patient_id`` is optional: a question may be asked without
+    patient context (the graph then answers from guideline evidence
+    alone, with a "no patient context" summary). When given it must
+    name a known synthetic patient, otherwise the request is a 404.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=4000)
     patient_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("question")
+    @classmethod
+    def _reject_blank_question(cls, value: str) -> str:
+        # min_length=1 alone still accepts a whitespace-only string;
+        # the graph would then treat it as a blank question. Reject it
+        # here so it is a clean 422 instead of a wasted graph run.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("question must not be blank")
+        return stripped
+
+    @field_validator("patient_id")
+    @classmethod
+    def _normalise_patient_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 class ClinicalQueryResponse(BaseModel):
@@ -59,6 +87,11 @@ class ClinicalQueryResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     safety_flags: list[str] = Field(default_factory=list)
     disclaimer: str
+    # Structured degradation/fallback metadata (section 3): True when
+    # any configured retrieval component failed and the graph fell back
+    # to the remaining components (see HybridRetrievalResult.degraded).
+    # The human-readable detail stays in `warnings`.
+    degraded: bool = False
 
 
 class CitationRecordOut(BaseModel):
@@ -96,6 +129,7 @@ class QueryDetailResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     safety_flags: list[str] = Field(default_factory=list)
     citations: list[CitationRecordOut] = Field(default_factory=list)
+    disclaimer: str = DISCLAIMER_TEXT
 
 
 class EvaluationMetricOut(BaseModel):
