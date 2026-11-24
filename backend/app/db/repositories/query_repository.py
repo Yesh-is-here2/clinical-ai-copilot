@@ -118,6 +118,29 @@ class ClinicalQueryRepository:
         )
         await self._session.execute(stmt)
 
+    async def record_failed_query(
+        self,
+        *,
+        query_id: uuid.UUID,
+        request_id: str,
+        patient_id: str | None,
+        question: str,
+    ) -> None:
+        """Best-effort minimal row for a query whose graph raised
+        unexpectedly (section 7). No ``GeneratedResponseRecord`` row:
+        none was produced. Deliberately does not commit - the caller
+        owns the single commit, exactly as ``persist_query`` does."""
+
+        self._session.add(
+            QueryRecord(
+                id=query_id,
+                request_id=request_id,
+                patient_id=patient_id,
+                question=question,
+                status="error_unexpected",
+            )
+        )
+
     async def persist_query(self, data: PersistedQueryInput) -> None:
         query_record = QueryRecord(
             id=data.query_id,
@@ -132,16 +155,18 @@ class ClinicalQueryRepository:
         )
         self._session.add(query_record)
 
-        seen_chunk_ids: set[str] = set()
+        # Deduplicate per (chunk, method): the same chunk legitimately
+        # has several rows (bm25 / semantic / fused / reranked - see
+        # app.services.clinical_query_service._build_retrieval_rows), so
+        # the guard key must include the method, not just the chunk.
+        # The unique constraint (query_id, chunk_id, retrieval_method)
+        # is the backstop if this guard ever misses.
+        seen: set[tuple[str, str]] = set()
         for row in data.retrieval_rows:
-            if row.chunk_id in seen_chunk_ids:
-                # Fused/reranked evidence is already deduplicated by
-                # chunk_id upstream (app.retrieval.fusion) - this guard
-                # only protects the unique constraint
-                # (query_id, chunk_id, retrieval_method) against ever
-                # being violated if that upstream invariant changes.
+            key = (row.chunk_id, row.retrieval_method)
+            if key in seen:
                 continue
-            seen_chunk_ids.add(row.chunk_id)
+            seen.add(key)
             self._session.add(
                 RetrievalResultRecord(
                     query_id=data.query_id,
