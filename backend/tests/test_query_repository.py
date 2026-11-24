@@ -158,6 +158,65 @@ async def test_persist_query_always_writes_a_generated_response_row_even_with_no
 
 
 @pytest.mark.anyio
+async def test_persist_query_keeps_one_row_per_retrieval_method_for_the_same_chunk() -> None:
+    # Same chunk surfaced by two methods must keep both rows (the
+    # unique key is (query_id, chunk_id, retrieval_method)); a
+    # same-(chunk, method) duplicate is still dropped.
+    session = _FakeAsyncSession()
+    repository = ClinicalQueryRepository(session)  # type: ignore[arg-type]
+
+    await repository.persist_query(
+        PersistedQueryInput(
+            query_id=uuid.uuid4(),
+            request_id="req-4",
+            patient_id=None,
+            question="q",
+            question_category=None,
+            status="normal",
+            final_response=_make_final_response(),
+            model_name=None,
+            latency_ms=None,
+            retrieval_rows=[
+                RetrievedEvidenceInput(
+                    chunk_id="chunk-1", retrieval_method="bm25", rank=2, score=0.5
+                ),
+                RetrievedEvidenceInput(
+                    chunk_id="chunk-1", retrieval_method="fused", rank=1, score=0.8
+                ),
+                RetrievedEvidenceInput(
+                    chunk_id="chunk-1", retrieval_method="bm25", rank=2, score=0.5
+                ),
+            ],
+        )
+    )
+
+    rows = [o for o in session.added if isinstance(o, RetrievalResultRecord)]
+    assert {(row.chunk_id, row.retrieval_method) for row in rows} == {
+        ("chunk-1", "bm25"),
+        ("chunk-1", "fused"),
+    }
+
+
+@pytest.mark.anyio
+async def test_record_failed_query_writes_a_minimal_query_row_without_a_generated_response() -> None:
+    session = _FakeAsyncSession()
+    repository = ClinicalQueryRepository(session)  # type: ignore[arg-type]
+    query_id = uuid.uuid4()
+
+    await repository.record_failed_query(
+        query_id=query_id,
+        request_id="req-5",
+        patient_id=None,
+        question="What is the target blood pressure?",
+    )
+
+    query_record = next(o for o in session.added if isinstance(o, QueryRecord))
+    assert query_record.id == query_id
+    assert query_record.status == "error_unexpected"
+    assert not any(isinstance(o, GeneratedResponseRecord) for o in session.added)
+
+
+@pytest.mark.anyio
 async def test_ensure_patient_synced_upserts_a_minimal_patient_row() -> None:
     session = _FakeAsyncSession()
     repository = ClinicalQueryRepository(session)  # type: ignore[arg-type]

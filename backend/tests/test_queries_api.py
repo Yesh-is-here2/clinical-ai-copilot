@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.api.deps import get_evaluation_repository, get_query_repository
+from app.clinical.final_response import DISCLAIMER_TEXT
 
 
 @dataclass
@@ -128,6 +129,7 @@ def test_get_query_found_returns_persisted_detail() -> None:
     assert body["query_id"] == str(query_id)
     assert body["answer"].startswith("Target blood pressure")
     assert body["citations"][0]["citation_label"] == "C1"
+    assert body["disclaimer"] == DISCLAIMER_TEXT
 
 
 def test_get_query_not_found_returns_404() -> None:

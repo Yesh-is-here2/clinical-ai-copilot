@@ -11,7 +11,16 @@ from app.healthcare.fhir_parser import (
 )
 
 
-DATA_DIR = Path("/app/data/fhir/patients")
+def _data_dir() -> Path:
+    # Docker is canonical (/app/...), but the suite must also run from
+    # a plain checkout - fall back to the repo-relative fixtures dir.
+    docker_dir = Path("/app/data/fhir/patients")
+    if docker_dir.exists():
+        return docker_dir
+    return Path(__file__).resolve().parents[2] / "data" / "fhir" / "patients"
+
+
+DATA_DIR = _data_dir()
 
 
 def test_fhir_patient_parser() -> None:

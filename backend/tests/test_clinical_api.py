@@ -25,8 +25,14 @@ from app.api.deps import (
     get_llm_provider,
 )
 from app.clinical.audit import InMemoryAuditLogWriter
+from app.clinical.final_response import DISCLAIMER_TEXT
 from app.clinical.generation import GroundedAnswer
-from app.clinical.llm import FailingStructuredLLMProvider, FakeStructuredLLMProvider
+from app.clinical.llm import (
+    FailingStructuredLLMProvider,
+    FakeStructuredLLMProvider,
+    OpenAIStructuredLLMProvider,
+)
+from app.models.query import QueryRecord, RetrievalResultRecord
 from app.retrieval.bm25 import BM25Index
 from app.retrieval.hybrid import HybridRetrievalError, HybridRetrievalService
 from app.schemas.document import ClinicalDocumentCategory, DocumentChunk
@@ -120,6 +126,15 @@ class _FailingHybridRetrieval:
         raise HybridRetrievalError("both vector and BM25 retrieval failed (synthetic)")
 
 
+class _ExplodingHybridRetrieval:
+    """Raises a *non*-HybridRetrievalError: an unexpected bug, not a
+    handled retrieval failure - the graph must not swallow it, and the
+    service must still record the failed query (section 7)."""
+
+    async def retrieve(self, query: str):
+        raise RuntimeError("unexpected retrieval boom")
+
+
 def _make_good_answer() -> GroundedAnswer:
     return GroundedAnswer(
         patient_summary="No patient context was provided for this question.",
@@ -129,6 +144,45 @@ def _make_good_answer() -> GroundedAnswer:
             "130 over 80 mmHg for most adults with hypertension [C1]."
         ),
         key_points=["Target blood pressure below 130/80 mmHg"],
+        citation_ids=["C1"],
+        warnings=[],
+        disclaimer="This information is for educational and research purposes only.",
+    )
+
+
+def _make_unsupported_answer() -> GroundedAnswer:
+    # Cites a real citation but asserts something the evidence never
+    # says - the hallucination layer (not citation fabrication) must
+    # guard this: hallucination_rate 1.0, above the 0.30 threshold.
+    return GroundedAnswer(
+        patient_summary="No patient context was provided for this question.",
+        clinical_question=_QUESTION,
+        answer="Metformin cures diabetes completely and permanently within weeks [C1].",
+        key_points=[],
+        citation_ids=["C1"],
+        warnings=[],
+        disclaimer="This information is for educational and research purposes only.",
+    )
+
+
+def _make_partly_unsupported_answer() -> GroundedAnswer:
+    # Three well-supported claims plus one unrelated, never-supported
+    # claim: hallucination_rate lands at 1/4 = 0.25, below the 0.30
+    # severe threshold, so the citation-validation backstop (not the
+    # hallucination layer) must guard this one.
+    return GroundedAnswer(
+        patient_summary="No patient context was provided for this question.",
+        clinical_question=_QUESTION,
+        answer=(
+            "Clinical guidelines recommend a target blood pressure below "
+            "130 over 80 mmHg for most adults with hypertension [C1]. "
+            "Guidelines support a target blood pressure below 130 over "
+            "80 mmHg for hypertension patients [C1]. "
+            "Clinical guidelines recommend monitoring blood pressure with "
+            "a target below 130 over 80 mmHg for hypertension [C1]. "
+            "Metformin cures diabetes completely and permanently within weeks [C1]."
+        ),
+        key_points=[],
         citation_ids=["C1"],
         warnings=[],
         disclaimer="This information is for educational and research purposes only.",
@@ -186,11 +240,20 @@ def test_happy_path_returns_normal_grounded_response(client, fake_session) -> No
     assert body["status"] == "normal"
     assert body["citations"]
     assert "130" in body["answer"]
-    assert body["disclaimer"]  # Phase 5 disclaimer preserved (section 18)
+    assert body["disclaimer"] == DISCLAIMER_TEXT  # exact Phase 5 text, not the LLM's
+    assert body["degraded"] is False
     assert "query_id" in body
     # Persistence actually happened, atomically, on the injected session.
     assert fake_session.committed is True
     assert fake_session.added  # queries + retrieval_results + generated_responses + citations + audit_logs
+    # One retrieval row per (chunk, method): every BM25-surfaced chunk
+    # gets both its bm25 rank/score and its fused RRF rank/score.
+    retrieval_rows = [
+        obj for obj in fake_session.added if isinstance(obj, RetrievalResultRecord)
+    ]
+    assert {
+        (row.chunk_id, row.retrieval_method) for row in retrieval_rows
+    } == {(f"c{i}", method) for i in (1, 2, 3) for method in ("bm25", "fused")}
 
 
 def test_unknown_patient_returns_404(client) -> None:
@@ -332,3 +395,85 @@ def test_response_never_leaks_internal_fields(client) -> None:
         "stage_timings",
     }
     assert not (forbidden_keys & body.keys())
+
+
+def test_unsupported_answer_returns_guarded_hallucination_response(client) -> None:
+    _override_retrieval_and_llm(
+        hybrid_retrieval=_make_sufficient_hybrid_service(),
+        llm_provider=FakeStructuredLLMProvider(response=_make_unsupported_answer()),
+    )
+
+    response = client.post("/clinical/query", json={"question": _QUESTION})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "guarded_hallucination"
+    assert body["citations"] == []
+    assert "withheld" in body["answer"].lower()
+    assert body["disclaimer"] == DISCLAIMER_TEXT
+
+
+def test_partly_unsupported_answer_returns_guarded_citation_response(client) -> None:
+    _override_retrieval_and_llm(
+        hybrid_retrieval=_make_sufficient_hybrid_service(),
+        llm_provider=FakeStructuredLLMProvider(
+            response=_make_partly_unsupported_answer()
+        ),
+    )
+
+    response = client.post("/clinical/query", json={"question": _QUESTION})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "guarded_citation_failure"
+    assert "withheld" in body["answer"].lower()
+    assert body["disclaimer"] == DISCLAIMER_TEXT
+
+
+def test_unconfigured_llm_returns_guarded_response_not_a_server_error(client) -> None:
+    # No OPENAI_API_KEY at all: the real provider must fail closed
+    # into a guarded generation failure, never a 500 or a fabricated
+    # answer (section 13).
+    _override_retrieval_and_llm(
+        hybrid_retrieval=_make_sufficient_hybrid_service(),
+        llm_provider=OpenAIStructuredLLMProvider(
+            api_key=None, model="gpt-4o-mini"
+        ),
+    )
+
+    response = client.post("/clinical/query", json={"question": _QUESTION})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "error_generation_failed"
+    assert body["disclaimer"] == DISCLAIMER_TEXT
+
+
+def test_whitespace_only_question_returns_422(client) -> None:
+    _override_retrieval_and_llm(
+        hybrid_retrieval=_make_sufficient_hybrid_service(),
+        llm_provider=FakeStructuredLLMProvider(response=_make_good_answer()),
+    )
+
+    response = client.post("/clinical/query", json={"question": "   "})
+
+    assert response.status_code == 422
+
+
+def test_unexpected_graph_failure_returns_500_and_records_failed_query(
+    client, fake_session
+) -> None:
+    _override_retrieval_and_llm(
+        hybrid_retrieval=_ExplodingHybridRetrieval(),
+        llm_provider=FakeStructuredLLMProvider(response=_make_good_answer()),
+    )
+
+    response = client.post("/clinical/query", json={"question": _QUESTION})
+
+    assert response.status_code == 500
+    assert "request_id" in response.json()["detail"]
+    failed = [obj for obj in fake_session.added if isinstance(obj, QueryRecord)]
+    assert len(failed) == 1
+    assert failed[0].status == "error_unexpected"
+    assert failed[0].question == _QUESTION
+    assert fake_session.committed is True
