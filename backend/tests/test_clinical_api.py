@@ -12,6 +12,7 @@ Postgres, no network, no OpenAI key anywhere in this file.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 
 import pytest
@@ -19,7 +20,9 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.api.deps import (
+    Actor,
     get_audit_writer,
+    get_current_actor,
     get_db,
     get_hybrid_retrieval_service,
     get_llm_provider,
@@ -33,9 +36,22 @@ from app.clinical.llm import (
     OpenAIStructuredLLMProvider,
 )
 from app.models.query import QueryRecord, RetrievalResultRecord
+from app.models.user import UserRole
 from app.retrieval.bm25 import BM25Index
 from app.retrieval.hybrid import HybridRetrievalError, HybridRetrievalService
 from app.schemas.document import ClinicalDocumentCategory, DocumentChunk
+
+
+# The clinician every test in this file runs as (Phase 7): the route
+# requires clinician-or-admin, and the actor is recorded on the
+# persisted query row and the audit entry.
+_CLINICIAN_ID = uuid.uuid4()
+_CLINICIAN = Actor(
+    user_id=_CLINICIAN_ID, email="clinician@example.com", role=UserRole.CLINICIAN
+)
+_REVIEWER = Actor(
+    user_id=uuid.uuid4(), email="reviewer@example.com", role=UserRole.REVIEWER
+)
 
 
 # ---------------------------------------------------------------------
@@ -200,6 +216,7 @@ def client(fake_session: _FakeAsyncSession):
         yield fake_session
 
     main_module.app.dependency_overrides[get_db] = _override_get_db
+    main_module.app.dependency_overrides[get_current_actor] = lambda: _CLINICIAN
 
     with TestClient(main_module.app) as test_client:
         yield test_client
@@ -225,9 +242,11 @@ def _override_retrieval_and_llm(
 
 
 def test_happy_path_returns_normal_grounded_response(client, fake_session) -> None:
+    audit_writer = InMemoryAuditLogWriter()
     _override_retrieval_and_llm(
         hybrid_retrieval=_make_sufficient_hybrid_service(),
         llm_provider=FakeStructuredLLMProvider(response=_make_good_answer()),
+        audit_writer=audit_writer,
     )
 
     response = client.post(
@@ -254,6 +273,16 @@ def test_happy_path_returns_normal_grounded_response(client, fake_session) -> No
     assert {
         (row.chunk_id, row.retrieval_method) for row in retrieval_rows
     } == {(f"c{i}", method) for i in (1, 2, 3) for method in ("bm25", "fused")}
+    # Phase 7: the persisted query row and the audit entry are
+    # attributed to the clinician who asked.
+    query_rows = [
+        obj for obj in fake_session.added if isinstance(obj, QueryRecord)
+    ]
+    assert len(query_rows) == 1
+    assert query_rows[0].user_id == _CLINICIAN_ID
+    assert len(audit_writer.entries) == 1
+    assert audit_writer.entries[0].actor_user_id == _CLINICIAN_ID
+    assert audit_writer.entries[0].actor_role == "clinician"
 
 
 def test_unknown_patient_returns_404(client) -> None:
@@ -476,4 +505,41 @@ def test_unexpected_graph_failure_returns_500_and_records_failed_query(
     assert len(failed) == 1
     assert failed[0].status == "error_unexpected"
     assert failed[0].question == _QUESTION
+    assert failed[0].user_id == _CLINICIAN_ID  # Phase 7: failed queries are attributed too.
     assert fake_session.committed is True
+
+
+# ---------------------------------------------------------------------
+# Phase 7: authentication / authorization for POST /clinical/query
+# ---------------------------------------------------------------------
+
+
+def test_clinical_query_requires_authentication(client) -> None:
+    main_module.app.dependency_overrides.pop(get_current_actor, None)
+    _override_retrieval_and_llm(
+        hybrid_retrieval=_make_sufficient_hybrid_service(),
+        llm_provider=FakeStructuredLLMProvider(response=_make_good_answer()),
+    )
+
+    response = client.post(
+        "/clinical/query",
+        json={"patient_id": "patient-001", "question": _QUESTION},
+    )
+
+    assert response.status_code == 401
+
+
+def test_clinical_query_rejects_reviewer_role(client) -> None:
+    # Reviewers audit past queries; they do not run new ones.
+    main_module.app.dependency_overrides[get_current_actor] = lambda: _REVIEWER
+    _override_retrieval_and_llm(
+        hybrid_retrieval=_make_sufficient_hybrid_service(),
+        llm_provider=FakeStructuredLLMProvider(response=_make_good_answer()),
+    )
+
+    response = client.post(
+        "/clinical/query",
+        json={"patient_id": "patient-001", "question": _QUESTION},
+    )
+
+    assert response.status_code == 403

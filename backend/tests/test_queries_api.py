@@ -18,8 +18,14 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.api.deps import get_evaluation_repository, get_query_repository
+from app.api.deps import (
+    Actor,
+    get_current_actor,
+    get_evaluation_repository,
+    get_query_repository,
+)
 from app.clinical.final_response import DISCLAIMER_TEXT
+from app.models.user import UserRole
 
 
 @dataclass
@@ -52,6 +58,9 @@ class _FakeQueryRecord:
     latency_ms: float | None
     created_at: datetime
     generated_response: _FakeGeneratedResponse | None
+    # Owner of the query (Phase 7): None for legacy rows that predate
+    # authentication.
+    user_id: uuid.UUID | None = None
 
 
 class _FakeQueryRepository:
@@ -114,9 +123,22 @@ def teardown_function() -> None:
     main_module.app.dependency_overrides.clear()
 
 
+_CLINICIAN_ID = uuid.uuid4()
+_ADMIN_ID = uuid.uuid4()
+_REVIEWER_ID = uuid.uuid4()
+
+
+def _as(role: UserRole, user_id: uuid.UUID) -> None:
+    main_module.app.dependency_overrides[get_current_actor] = lambda: Actor(
+        user_id=user_id, email=f"{role.value}@example.com", role=role
+    )
+
+
 def test_get_query_found_returns_persisted_detail() -> None:
     query_id = uuid.uuid4()
     record = _make_record(query_id)
+    # An admin sees every query.
+    _as(UserRole.ADMIN, _ADMIN_ID)
     main_module.app.dependency_overrides[get_query_repository] = (
         lambda: _FakeQueryRepository(record)
     )
@@ -133,6 +155,7 @@ def test_get_query_found_returns_persisted_detail() -> None:
 
 
 def test_get_query_not_found_returns_404() -> None:
+    _as(UserRole.ADMIN, _ADMIN_ID)
     main_module.app.dependency_overrides[get_query_repository] = (
         lambda: _FakeQueryRepository(None)
     )
@@ -143,8 +166,68 @@ def test_get_query_not_found_returns_404() -> None:
     assert response.status_code == 404
 
 
+def test_get_query_owner_can_read_own_query() -> None:
+    query_id = uuid.uuid4()
+    record = _make_record(query_id)
+    record.user_id = _CLINICIAN_ID
+    _as(UserRole.CLINICIAN, _CLINICIAN_ID)
+    main_module.app.dependency_overrides[get_query_repository] = (
+        lambda: _FakeQueryRepository(record)
+    )
+
+    with TestClient(main_module.app) as client:
+        response = client.get(f"/queries/{query_id}")
+
+    assert response.status_code == 200
+
+
+def test_get_query_other_users_query_is_indistinguishable_from_missing() -> None:
+    query_id = uuid.uuid4()
+    record = _make_record(query_id)
+    record.user_id = uuid.uuid4()  # Someone else's query.
+    _as(UserRole.CLINICIAN, _CLINICIAN_ID)
+    main_module.app.dependency_overrides[get_query_repository] = (
+        lambda: _FakeQueryRepository(record)
+    )
+
+    with TestClient(main_module.app) as client:
+        response = client.get(f"/queries/{query_id}")
+
+    assert response.status_code == 404
+
+
+def test_get_query_legacy_row_without_owner_is_readable() -> None:
+    # Rows persisted before Phase 7 have no owner; they stay readable
+    # by any authenticated user rather than becoming orphaned.
+    query_id = uuid.uuid4()
+    record = _make_record(query_id)
+    record.user_id = None
+    _as(UserRole.CLINICIAN, _CLINICIAN_ID)
+    main_module.app.dependency_overrides[get_query_repository] = (
+        lambda: _FakeQueryRepository(record)
+    )
+
+    with TestClient(main_module.app) as client:
+        response = client.get(f"/queries/{query_id}")
+
+    assert response.status_code == 200
+
+
+def test_get_query_requires_authentication() -> None:
+    query_id = uuid.uuid4()
+    main_module.app.dependency_overrides[get_query_repository] = (
+        lambda: _FakeQueryRepository(_make_record(query_id))
+    )
+
+    with TestClient(main_module.app) as client:
+        response = client.get(f"/queries/{query_id}")
+
+    assert response.status_code == 401
+
+
 def test_get_query_evaluation_not_run_when_no_metrics_exist() -> None:
     query_id = uuid.uuid4()
+    _as(UserRole.REVIEWER, _REVIEWER_ID)
     main_module.app.dependency_overrides[get_query_repository] = (
         lambda: _FakeQueryRepository(_make_record(query_id))
     )
@@ -163,6 +246,7 @@ def test_get_query_evaluation_not_run_when_no_metrics_exist() -> None:
 
 def test_get_query_evaluation_returns_persisted_metrics() -> None:
     query_id = uuid.uuid4()
+    _as(UserRole.REVIEWER, _REVIEWER_ID)
     main_module.app.dependency_overrides[get_query_repository] = (
         lambda: _FakeQueryRepository(_make_record(query_id))
     )
@@ -182,6 +266,7 @@ def test_get_query_evaluation_returns_persisted_metrics() -> None:
 
 
 def test_get_query_evaluation_for_unknown_query_returns_404() -> None:
+    _as(UserRole.REVIEWER, _REVIEWER_ID)
     main_module.app.dependency_overrides[get_query_repository] = (
         lambda: _FakeQueryRepository(None)
     )
@@ -193,3 +278,34 @@ def test_get_query_evaluation_for_unknown_query_returns_404() -> None:
         response = client.get(f"/queries/{uuid.uuid4()}/evaluation")
 
     assert response.status_code == 404
+
+
+def test_get_query_evaluation_requires_reviewer_or_admin() -> None:
+    query_id = uuid.uuid4()
+    _as(UserRole.CLINICIAN, _CLINICIAN_ID)
+    main_module.app.dependency_overrides[get_query_repository] = (
+        lambda: _FakeQueryRepository(_make_record(query_id))
+    )
+    main_module.app.dependency_overrides[get_evaluation_repository] = (
+        lambda: _FakeEvaluationRepository([])
+    )
+
+    with TestClient(main_module.app) as client:
+        response = client.get(f"/queries/{query_id}/evaluation")
+
+    assert response.status_code == 403
+
+
+def test_get_query_evaluation_requires_authentication() -> None:
+    query_id = uuid.uuid4()
+    main_module.app.dependency_overrides[get_query_repository] = (
+        lambda: _FakeQueryRepository(_make_record(query_id))
+    )
+    main_module.app.dependency_overrides[get_evaluation_repository] = (
+        lambda: _FakeEvaluationRepository([])
+    )
+
+    with TestClient(main_module.app) as client:
+        response = client.get(f"/queries/{query_id}/evaluation")
+
+    assert response.status_code == 401
