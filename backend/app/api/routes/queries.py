@@ -16,6 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import get_evaluation_repository, get_query_repository
+from app.clinical.final_response import DISCLAIMER_TEXT
 from app.db.repositories.evaluation_repository import EvaluationRepository
 from app.db.repositories.query_repository import ClinicalQueryRepository
 from app.schemas.clinical import (
@@ -71,6 +72,7 @@ async def get_query(
             )
             for citation in (generated.citations if generated else [])
         ],
+        disclaimer=DISCLAIMER_TEXT,
     )
 
 

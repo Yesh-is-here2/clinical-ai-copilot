@@ -54,7 +54,7 @@ from app.services.clinical_query_service import ClinicalQueryService
 from app.services.document_ingestion_service import DocumentIngestionService
 from app.services.embeddings import (
     EmbeddingProvider,
-    EmbeddingProviderNotConfiguredError,
+    EmbeddingProviderError,
     get_embedding_provider,
 )
 from app.services.patient import PatientService, patient_service as _default_patient_service
@@ -179,7 +179,12 @@ async def get_hybrid_retrieval_service(
     if settings.openai_api_key:
         try:
             embedding_provider = get_embedding_provider()
-        except EmbeddingProviderNotConfiguredError:
+        except EmbeddingProviderError:
+            # Any provider-construction failure (not just a missing
+            # key) degrades to BM25-only retrieval rather than failing
+            # the whole request: vector search is one component, and
+            # HybridRetrievalService already reports that degradation
+            # explicitly. Never fall back to fake embeddings here.
             embedding_provider = None
 
         if embedding_provider is not None:
